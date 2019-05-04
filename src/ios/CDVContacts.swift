@@ -75,7 +75,7 @@ class CDVNewContactsController: CNContactViewController {
         // NSLog(@"Contacts::onAppTerminate");
     }
     
-    func checkContactPermission() {
+    func checkContactPermission(_ completion: (() -> Void)? = nil) {
         // if no permissions granted try to request them first
         let status = CNContactStore.authorizationStatus(for: .contacts)
         if status == .notDetermined {
@@ -83,7 +83,15 @@ class CDVNewContactsController: CNContactViewController {
                 if granted {
                     print("Access granted.")
                 }
+                
+                if let completionBlock = completion {
+                    completionBlock()
+                }
             })
+        } else {
+            if let completionBlock = completion {
+                completionBlock()
+            }
         }
     }
     
@@ -204,33 +212,22 @@ class CDVNewContactsController: CNContactViewController {
     
     @objc(pickContact:)
     func pickContact(_ command: CDVInvokedUrlCommand) {
-        checkContactPermission()
-        let newCommand = CDVInvokedUrlCommand(arguments: command.arguments, callbackId: command.callbackId, className: command.className, methodName: command.methodName)
-        // First check for Address book permissions
-        let status = CNContactStore.authorizationStatus(for: .contacts)
-        if status == .authorized {
-            if let cmd = newCommand {
-                chooseContact(cmd)
-            }
-            return
-        }
-        let errorResult = CDVPluginResult(status: CDVCommandStatus_ERROR, messageAs: CDVContactError.PERMISSION_DENIED_ERROR.rawValue)
-        // if the access is already restricted/denied the only way is to fail
-        if status == .restricted || status == .denied {
-            commandDelegate.send(errorResult, callbackId: command.callbackId)
-            return
-        }
-        // if no permissions granted try to request them first
-        if status == .notDetermined {
-            CNContactStore().requestAccess(for: .contacts, completionHandler: {(_ granted: Bool, _ error: Error?) -> Void in
-                if granted {
-                    if let cmd = newCommand {
-                        self.chooseContact(cmd)
-                    }
-                    return
+        checkContactPermission { [weak self] in
+            let newCommand = CDVInvokedUrlCommand(arguments: command.arguments, callbackId: command.callbackId, className: command.className, methodName: command.methodName)
+            // First check for Address book permissions
+            let status = CNContactStore.authorizationStatus(for: .contacts)
+            if status == .authorized {
+                if let cmd = newCommand {
+                    self?.chooseContact(cmd)
                 }
-                self.commandDelegate.send(errorResult, callbackId: command.callbackId)
-            })
+                return
+            }
+            // if the access is already restricted/denied the only way is to fail
+            if status == .restricted || status == .denied {
+                let errorResult = CDVPluginResult(status: CDVCommandStatus_ERROR, messageAs: CDVContactError.PERMISSION_DENIED_ERROR.rawValue)
+                self?.commandDelegate.send(errorResult, callbackId: command.callbackId)
+                return
+            }
         }
     }
     
@@ -342,96 +339,96 @@ class CDVNewContactsController: CNContactViewController {
     
     @objc(search:)
     func search(_ command: CDVInvokedUrlCommand) {
-        checkContactPermission()
-        let callbackId: String = command.callbackId
-        let commandFields = command.argument(at: 0) as? [Any]
-        let findOptions = command.argument(at: 1, withDefault: [AnyHashable: Any]()) as? [AnyHashable: Any]
-        if let fields = commandFields {
-            commandDelegate.run(inBackground: {() -> Void in
-                let weakSelf: CDVContacts? = self
-                if CNContactStore.authorizationStatus(for: .contacts) == .authorized {
-                    // get the findOptions values
-                    var multiple = false
-                    // default is false
-                    var filter: String = ""
-                    var desiredFields: [Any] = ["*"]
-                    if let opts = findOptions {
-                        if (opts.count > 0) {
-                            var value: Any? = nil
-                            let filterValue = opts["filter"]
-                            if let f = filterValue as? String {
-                                filter = f
-                            }
-                            value = opts["multiple"]
-                            if (value is NSNumber) {
-                                // multiple is a boolean that will come through as an NSNumber
-                                multiple = (value as? NSNumber) != 0
-                                // NSLog(@"multiple is: %d", multiple);
-                            }
-                            if let dFields = opts["desiredFields"] as? [Any] {
-                                // return all fields if desired fields are not explicitly defined
-                                if dFields.count > 0 {
-                                    desiredFields = dFields
+        checkContactPermission { [weak self] in
+            let callbackId: String = command.callbackId
+            let commandFields = command.argument(at: 0) as? [Any]
+            let findOptions = command.argument(at: 1, withDefault: [AnyHashable: Any]()) as? [AnyHashable: Any]
+            if let fields = commandFields {
+                self?.commandDelegate.run(inBackground: {() -> Void in
+                    let weakSelf: CDVContacts? = self
+                    if CNContactStore.authorizationStatus(for: .contacts) == .authorized {
+                        // get the findOptions values
+                        var multiple = false
+                        // default is false
+                        var filter: String = ""
+                        var desiredFields: [Any] = ["*"]
+                        if let opts = findOptions {
+                            if (opts.count > 0) {
+                                var value: Any? = nil
+                                let filterValue = opts["filter"]
+                                if let f = filterValue as? String {
+                                    filter = f
                                 }
+                                value = opts["multiple"]
+                                if (value is NSNumber) {
+                                    // multiple is a boolean that will come through as an NSNumber
+                                    multiple = (value as? NSNumber) != 0
+                                    // NSLog(@"multiple is: %d", multiple);
+                                }
+                                if let dFields = opts["desiredFields"] as? [Any] {
+                                    // return all fields if desired fields are not explicitly defined
+                                    if dFields.count > 0 {
+                                        desiredFields = dFields
+                                    }
+                                }
+                                
                             }
-                            
                         }
-                    }
-                    let searchFields = CDVContact.self.calcReturnFields(fields)
-                    let returnFields = CDVContact.self.calcReturnFields(desiredFields)
-                    var matches: [CDVContact] = [CDVContact]()
-                    if (filter == "") {
-                        // get all records
-                        let fetchRequest = CNContactFetchRequest.init(keysToFetch: CDVContacts.allContactKeys)
-                        fetchRequest.predicate = nil
-                        try? CNContactStore().enumerateContacts(with: fetchRequest, usingBlock: {(contact: CNContact, stop: UnsafeMutablePointer<ObjCBool>) -> Void in
-                            // create Contacts and put into matches array
-                            // doesn't make sense to ask for all records when multiple == NO but better check
-                            if !multiple {
-                                if matches.count == 1 {
-                                    return
+                        let searchFields = CDVContact.self.calcReturnFields(fields)
+                        let returnFields = CDVContact.self.calcReturnFields(desiredFields)
+                        var matches: [CDVContact] = [CDVContact]()
+                        if (filter == "") {
+                            // get all records
+                            let fetchRequest = CNContactFetchRequest.init(keysToFetch: CDVContacts.allContactKeys)
+                            fetchRequest.predicate = nil
+                            try? CNContactStore().enumerateContacts(with: fetchRequest, usingBlock: {(contact: CNContact, stop: UnsafeMutablePointer<ObjCBool>) -> Void in
+                                // create Contacts and put into matches array
+                                // doesn't make sense to ask for all records when multiple == NO but better check
+                                if !multiple {
+                                    if matches.count == 1 {
+                                        return
+                                    }
+                                }
+                                matches.append(CDVContact(fromCNContact: contact))
+                            })
+                        } else {
+                            let fetchRequest = CNContactFetchRequest.init(keysToFetch: CDVContacts.allContactKeys)
+                            fetchRequest.predicate = nil
+                            try? CNContactStore().enumerateContacts(with: fetchRequest, usingBlock: {(contact: CNContact, stop: UnsafeMutablePointer<ObjCBool>) -> Void in
+                                let testContact = CDVContact(fromCNContact: contact)
+                                let match = testContact.foundValue(filter, inFields: searchFields)
+                                if match {
+                                    matches.append(testContact)
+                                }
+                            })
+                        }
+                        var returnContacts = [[AnyHashable: Any]]()
+                        if (matches.count > 0) {
+                            // convert to JS Contacts format and return in callback
+                            // - returnFields  determines what properties to return
+                            autoreleasepool {
+                                let count = multiple == true ? Int(matches.count) : 1
+                                for i in 0..<count {
+                                    let contact = matches[i].toDictionary(returnFields)
+                                    if contact[NSNull()] == nil {
+                                        returnContacts.append(contact)
+                                    }
                                 }
                             }
-                            matches.append(CDVContact(fromCNContact: contact))
-                        })
+                        }
+                        // return found contacts (array is empty if no contacts found)
+                        let result = CDVPluginResult(status: CDVCommandStatus_OK, messageAs: returnContacts)
+                        weakSelf?.commandDelegate.send(result, callbackId: callbackId)
+                        // NSLog(@"findCallback string: %@", jsString);
                     } else {
-                        let fetchRequest = CNContactFetchRequest.init(keysToFetch: CDVContacts.allContactKeys)
-                        fetchRequest.predicate = nil
-                        try? CNContactStore().enumerateContacts(with: fetchRequest, usingBlock: {(contact: CNContact, stop: UnsafeMutablePointer<ObjCBool>) -> Void in
-                            let testContact = CDVContact(fromCNContact: contact)
-                            let match = testContact.foundValue(filter, inFields: searchFields)
-                            if match {
-                                matches.append(testContact)
-                            }
-                        })
+                        // permission was denied or other error - return error
+                        let result = CDVPluginResult(status: CDVCommandStatus_ERROR, messageToErrorObject: CDVContactError.UNKNOWN_ERROR.rawValue)
+                        weakSelf?.commandDelegate.send(result, callbackId: callbackId)
+                        return
                     }
-                    var returnContacts = [[AnyHashable: Any]]()
-                    if (matches.count > 0) {
-                        // convert to JS Contacts format and return in callback
-                        // - returnFields  determines what properties to return
-                        autoreleasepool {
-                            let count = multiple == true ? Int(matches.count) : 1
-                            for i in 0..<count {
-                                let contact = matches[i].toDictionary(returnFields)
-                                if contact[NSNull()] == nil {
-                                    returnContacts.append(contact)
-                                }
-                            }
-                        }
-                    }
-                    // return found contacts (array is empty if no contacts found)
-                    let result = CDVPluginResult(status: CDVCommandStatus_OK, messageAs: returnContacts)
-                    weakSelf?.commandDelegate.send(result, callbackId: callbackId)
-                    // NSLog(@"findCallback string: %@", jsString);
-                } else {
-                    // permission was denied or other error - return error
-                    let result = CDVPluginResult(status: CDVCommandStatus_ERROR, messageToErrorObject: CDVContactError.UNKNOWN_ERROR.rawValue)
-                    weakSelf?.commandDelegate.send(result, callbackId: callbackId)
-                    return
-                }
-            })
+                })
+            }
         }
-        return
     }
     
     func save(_ command: CDVInvokedUrlCommand) {
