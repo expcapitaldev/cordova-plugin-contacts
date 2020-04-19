@@ -62,7 +62,7 @@ class CDVNewContactsController: CNContactViewController {
                                                     CNContactJobTitleKey as CNKeyDescriptor,
                                                     CNContactDepartmentNameKey as CNKeyDescriptor,
                                                     CNContactBirthdayKey as CNKeyDescriptor,
-                                                    CNContactNoteKey as CNKeyDescriptor,
+                                                    //CNContactNoteKey as CNKeyDescriptor, //Note field requires additional entitlements: https://developer.apple.com/documentation/bundleresources/entitlements/com_apple_developer_contacts_notes
                                                     CNContactUrlAddressesKey as CNKeyDescriptor,
                                                     CNContactImageDataKey as CNKeyDescriptor,
                                                     CNInstantMessageAddressUsernameKey as CNKeyDescriptor,
@@ -377,30 +377,41 @@ class CDVNewContactsController: CNContactViewController {
                         let searchFields = CDVContact.self.calcReturnFields(fields)
                         let returnFields = CDVContact.self.calcReturnFields(desiredFields)
                         var matches: [CDVContact] = [CDVContact]()
+                        var contactsFetchError: Error?
                         if (filter == "") {
                             // get all records
                             let fetchRequest = CNContactFetchRequest.init(keysToFetch: CDVContacts.allContactKeys)
                             fetchRequest.predicate = nil
-                            try? CNContactStore().enumerateContacts(with: fetchRequest, usingBlock: {(contact: CNContact, stop: UnsafeMutablePointer<ObjCBool>) -> Void in
-                                // create Contacts and put into matches array
-                                // doesn't make sense to ask for all records when multiple == NO but better check
-                                if !multiple {
-                                    if matches.count == 1 {
-                                        return
+                            
+                            do {
+                                try CNContactStore().enumerateContacts(with: fetchRequest, usingBlock: {(contact: CNContact, stop: UnsafeMutablePointer<ObjCBool>) -> Void in
+                                    // create Contacts and put into matches array
+                                    // doesn't make sense to ask for all records when multiple == NO but better check
+                                    if !multiple {
+                                        if matches.count == 1 {
+                                            return
+                                        }
                                     }
-                                }
-                                matches.append(CDVContact(fromCNContact: contact))
-                            })
+                                    matches.append(CDVContact(fromCNContact: contact))
+                                })
+                            } catch let error {
+                                contactsFetchError = error
+                            }
                         } else {
                             let fetchRequest = CNContactFetchRequest.init(keysToFetch: CDVContacts.allContactKeys)
                             fetchRequest.predicate = nil
-                            try? CNContactStore().enumerateContacts(with: fetchRequest, usingBlock: {(contact: CNContact, stop: UnsafeMutablePointer<ObjCBool>) -> Void in
-                                let testContact = CDVContact(fromCNContact: contact)
-                                let match = testContact.foundValue(filter, inFields: searchFields)
-                                if match {
-                                    matches.append(testContact)
-                                }
-                            })
+                            
+                            do {
+                                try CNContactStore().enumerateContacts(with: fetchRequest, usingBlock: {(contact: CNContact, stop: UnsafeMutablePointer<ObjCBool>) -> Void in
+                                    let testContact = CDVContact(fromCNContact: contact)
+                                    let match = testContact.foundValue(filter, inFields: searchFields)
+                                    if match {
+                                        matches.append(testContact)
+                                    }
+                                })
+                            } catch let error {
+                                contactsFetchError = error
+                            }
                         }
                         var returnContacts = [[AnyHashable: Any]]()
                         if (matches.count > 0) {
@@ -416,10 +427,15 @@ class CDVNewContactsController: CNContactViewController {
                                 }
                             }
                         }
-                        // return found contacts (array is empty if no contacts found)
-                        let result = CDVPluginResult(status: CDVCommandStatus_OK, messageAs: returnContacts)
-                        weakSelf?.commandDelegate.send(result, callbackId: callbackId)
-                        // NSLog(@"findCallback string: %@", jsString);
+                        
+                        if let error = contactsFetchError {
+                            let result = CDVPluginResult(status: CDVCommandStatus_ERROR, messageAs: error.localizedDescription)
+                            weakSelf?.commandDelegate.send(result, callbackId: callbackId)
+                        } else {
+                            // return found contacts (array is empty if no contacts found)
+                            let result = CDVPluginResult(status: CDVCommandStatus_OK, messageAs: returnContacts)
+                            weakSelf?.commandDelegate.send(result, callbackId: callbackId)
+                        }
                     } else {
                         // permission was denied or other error - return error
                         let result = CDVPluginResult(status: CDVCommandStatus_ERROR, messageToErrorObject: CDVContactError.UNKNOWN_ERROR.rawValue)
